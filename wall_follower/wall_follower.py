@@ -16,11 +16,11 @@ class WallFollower(Node):
     def __init__(self):
         super().__init__("wall_follower")
         # Declare parameters to make them available for use
-        self.declare_parameter("scan_topic", "default")
-        self.declare_parameter("drive_topic", "default")
-        self.declare_parameter("side", "default")
-        self.declare_parameter("velocity", "default")
-        self.declare_parameter("desired_distance", "default")
+        self.declare_parameter("scan_topic", "/scan")
+        self.declare_parameter("drive_topic", "/drive")
+        self.declare_parameter("side", -1)
+        self.declare_parameter("velocity", 1.0)
+        self.declare_parameter("desired_distance", 1.0)
 
         # Fetch constants from the ROS parameter server
         # DO NOT MODIFY THIS! This is necessary for the tests to be able to test varying parameters!
@@ -29,77 +29,88 @@ class WallFollower(Node):
         self.SIDE = self.get_parameter('side').get_parameter_value().integer_value
         self.VELOCITY = self.get_parameter('velocity').get_parameter_value().double_value
         self.DESIRED_DISTANCE = self.get_parameter('desired_distance').get_parameter_value().double_value
-
-        # This activates the parameters_callback function so that the tests are able
-        # to change the parameters during testing.
-        # DO NOT MODIFY THIS!
         self.add_on_set_parameters_callback(self.parameters_callback)
 
 	    # TODO: Initialize your publishers and subscribers here
         self.drive_publisher = self.create_publisher(AckermannDriveStamped, self.DRIVE_TOPIC, 10)
-        self.debug_publisher = self.create_publisher(LaserScan, 'debug', 10)
         self.line_pub = self.create_publisher(Marker, 'wall', 1)
         self.scan_subscriber = self.create_subscription(LaserScan, self.SCAN_TOPIC, self.listener_callback, 10)
 
         # PID constants
-        self.Kp = 5.0
-        self.Ki = 0.0
-        self.Kd = 0.3
-        self.i = 0
+        self.Kp = 8.0
+        self.Kd = 0.15
+        self.Kf = 25.0
+
         self.prev_e = 0
         self.prev_t = self.get_clock().now().nanoseconds / 1e9
+        self.front_threshold = self.VELOCITY * 0.25
 
+        # self.buffer = deque([], maxlen=5)
 
     # TODO: Write your callback functions here
     def listener_callback(self, msg):
+        def deg_to_index(deg):
+            return int((deg * math.pi / 180 - angle_min) / angle_increment)
+
+        def front_distance_error(front_distance, width=0.1):
+            """Sigmoid"""
+            error = self.front_threshold - front_distance
+            return 1 / (1 + np.exp(-error / width))
+
         print = self.get_logger().info
+
         angle_min = msg.angle_min
         angle_increment = msg.angle_increment
         ranges = msg.ranges
 
-        ### Wall and Front Range ###
-        # wall_angle = math.pi/2 * self.SIDE
-        # ninety = int((wall_angle - angle_min) / angle_increment)
-        # wall_spread = 5
+        ### Wall Approximation ###
+        wall_start_angle, wall_end_angle = -100, -60
+        if self.SIDE == 1:
+            wall_start_angle, wall_end_angle = -wall_end_angle, -wall_start_angle
+        wall_start, wall_end = deg_to_index(wall_start_angle), deg_to_index(wall_end_angle)
+        wall_angles = np.array([angle_min + angle_increment * i for i in range(wall_start, wall_end)])
+        detected_wall = np.array(ranges[wall_start:wall_end])
 
-        wall_start, wall_end = (55, 75) if self.SIDE == 1 else (25, 45)
-        angles = np.array([angle_min + angle_increment * i for i in range(wall_start, wall_end)])
-        detected_wall_range = np.array(ranges[wall_start:wall_end])
-        front_range = np.min(np.array(ranges[45:55]))
+        ### Front Range ###
+        front_angle = 2
+        front_start, front_end = deg_to_index(-front_angle), deg_to_index(front_angle)
+        front_angles = np.array([angle_min + angle_increment * i for i in range(front_start, front_end)])
+        detected_front = np.array(ranges[front_start:front_end])
+        front_distance = np.mean(detected_front)
 
-        ## Line approx ###
-        x = detected_wall_range * np.cos(angles)
-        y = detected_wall_range * np.sin(angles)
+        ### Line Approximation ###
+        x = detected_wall * np.cos(wall_angles)
+        y = detected_wall * np.sin(wall_angles)
+
         m, b = np.polyfit(x, y, deg=1)
 
-        max_distance = 15
+        max_distance = 6
         mask = (x**2 + y**2) <= max_distance**2
         x_filtered = x[mask]
         y_filtered = y[mask]
-
         if x_filtered.size < 2:
-            m, b = 0, self.DESIRED_DISTANCE
+            m, b = 0, self.DESIRED_DISTANCE + 5.0
         else:
             m, b = np.polyfit(x_filtered, y_filtered, deg=1)
 
-        new_wall_dist = abs(b) / np.sqrt(1 + m**2)
+        # wall_distance = abs(b) / np.sqrt(1 + m**2)
+        wall_distance = abs(b)
         VisualizationTools.plot_line(x, m*x + b, self.line_pub, frame="/laser")
 
         ### PID ###
-        dist_r, dist_y = self.DESIRED_DISTANCE, new_wall_dist
-
-        e = (dist_y - dist_r) * self.SIDE
+        e_side = (wall_distance - self.DESIRED_DISTANCE) * self.SIDE
+        e_front = front_distance_error(front_distance) * -self.SIDE
 
         t = self.get_clock().now().nanoseconds / 1e9
-
         dt = t - self.prev_t
-        self.i += e * dt
-        d = (e - self.prev_e) / dt
+        d_side = (e_side - self.prev_e) / dt
 
-        self.prev_e = e
+        self.prev_e = e_side
         self.prev_t = t
 
-        u = self.Kp * e + self.Ki * self.i + self.Kd * d
+        u = self.Kp * e_side + self.Kd * d_side + self.Kf * e_front
+
+        print(f"{u}")
 
         ### Publishing ###
         acker = AckermannDriveStamped()
@@ -107,7 +118,7 @@ class WallFollower(Node):
         acker.drive.speed = self.VELOCITY
         acker.drive.acceleration = 0.0
         acker.drive.jerk = 0.0
-        acker.drive.steering_angle = u + -self.SIDE * 1/front_range**3
+        acker.drive.steering_angle = u
         acker.drive.steering_angle_velocity = 0.0
         self.drive_publisher.publish(acker)
 
