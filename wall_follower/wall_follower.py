@@ -12,13 +12,12 @@ from collections import deque
 
 
 class WallFollower(Node):
-
     def __init__(self):
-        super().__init__("wall_follower")
+        super().__init__("wall_follower_copy")
         # Declare parameters to make them available for use
         self.declare_parameter("scan_topic", "/scan")
-        self.declare_parameter("drive_topic", "/drive")
-        self.declare_parameter("side", -1)
+        self.declare_parameter("drive_topic", "/vesc/high_level/input/nav_0")
+        self.declare_parameter("side", 1)
         self.declare_parameter("velocity", 1.0)
         self.declare_parameter("desired_distance", 1.0)
 
@@ -31,88 +30,142 @@ class WallFollower(Node):
         self.DESIRED_DISTANCE = self.get_parameter('desired_distance').get_parameter_value().double_value
         self.add_on_set_parameters_callback(self.parameters_callback)
 
-	    # TODO: Initialize your publishers and subscribers here
+        # TODO: Initialize your publishers and subscribers here
         self.drive_publisher = self.create_publisher(AckermannDriveStamped, self.DRIVE_TOPIC, 10)
         self.line_pub = self.create_publisher(Marker, 'wall', 1)
         self.scan_subscriber = self.create_subscription(LaserScan, self.SCAN_TOPIC, self.listener_callback, 10)
 
-        # PID constants
-        self.Kp = 8.0
-        self.Kd = 0.15
-        self.Kf = 25.0
+        ### Constants ###
+        self.angle_min = 0.1
+        self.angle_increment = 0.1
+        self.sigmoid_width = 0.3
+
+        ### Turn logic ###
+        self.turns = {
+            # Opposite Same Front: Action #
+            (1, 1, 1): 'straight',
+            (1, 1, 0): 'straight',
+            (1, 0, 1): 'same',
+            (0, 1, 1): 'opp',
+            (1, 0, 0): 'same',
+            (0, 1, 0): 'straight',
+            (0, 0, 1): 'same',
+            (0, 0, 0): 'straight'
+        }
+
+        # Threshholds #
+        self.front_threshold = self.DESIRED_DISTANCE * 1.5 + self.VELOCITY * 0.5
+        self.same_threshold = self.DESIRED_DISTANCE * 2.5 + self.VELOCITY * 0.5
+        self.opp_threshold = self.DESIRED_DISTANCE * 0.5 + self.VELOCITY * 0.0
+
+        ### Windows (Defined for the right side) ###
+        self.wall_start, self.wall_end = -100, -60
+        self.opp_start, self.opp_end = -95, -85
+        self.same_start, self.same_end =  -90, -30
+        self.front_start, self.front_end = -3, 3
+        self.wall_start_wide, self.wall_end_wide = -80, 0
+
+        ### PID constants ###
+        self.Kp = 2.5 # 2.5
+        self.Kd = 0.3 # 0.3
 
         self.prev_e = 0
         self.prev_t = self.get_clock().now().nanoseconds / 1e9
-        self.front_threshold = self.VELOCITY * 0.25
 
-        # self.buffer = deque([], maxlen=5)
 
-    # TODO: Write your callback functions here
-    def listener_callback(self, msg):
-        def deg_to_index(deg):
-            return int((deg * math.pi / 180 - angle_min) / angle_increment)
+    def deg_to_index(self, deg):
+        return int((deg * math.pi / 180 - self.angle_min) / self.angle_increment)
 
-        def front_distance_error(front_distance, width=0.1):
-            """Sigmoid"""
-            error = self.front_threshold - front_distance
-            return 1 / (1 + np.exp(-error / width))
 
-        print = self.get_logger().info
+    def opp_close(self, ranges):
+        """
+        Check if the opposite window range (mean) is closer than right_threshold
+        """
+        start, end = self.opp_start, self.opp_end
+        if self.SIDE == -1:
+            start, end = -end, -start
+        if np.min(ranges[self.deg_to_index(start):self.deg_to_index(end)]) < self.opp_threshold:
+            return 1
+        return 0
 
-        angle_min = msg.angle_min
-        angle_increment = msg.angle_increment
-        ranges = msg.ranges
 
-        ### Wall Approximation ###
-        wall_start_angle, wall_end_angle = -100, -60
+    def same_close(self, ranges):
+        """
+        Check if the front side (half) window has a mean range
+        measurement greater than the front_side_threshold
+        """
+        start, end = self.same_start, self.same_end
         if self.SIDE == 1:
-            wall_start_angle, wall_end_angle = -wall_end_angle, -wall_start_angle
-        wall_start, wall_end = deg_to_index(wall_start_angle), deg_to_index(wall_end_angle)
-        wall_angles = np.array([angle_min + angle_increment * i for i in range(wall_start, wall_end)])
-        detected_wall = np.array(ranges[wall_start:wall_end])
+            start, end = -end, -start
+        if np.min(ranges[self.deg_to_index(start):self.deg_to_index(end)]) < self.same_threshold:
+            return 1
+        return 0
 
-        ### Front Range ###
-        front_angle = 2
-        front_start, front_end = deg_to_index(-front_angle), deg_to_index(front_angle)
-        front_angles = np.array([angle_min + angle_increment * i for i in range(front_start, front_end)])
-        detected_front = np.array(ranges[front_start:front_end])
+
+    def front_close(self, ranges):
+        """
+        Check if the front range is less than the front_close_threshold
+        """
+        start, end = self.front_start, self.front_end
+        detected_front = np.array(ranges[self.deg_to_index(start):self.deg_to_index(end)])
         front_distance = np.mean(detected_front)
+        if front_distance < self.front_threshold:
+            return 1
+        return 0
+
+
+    def wall_dist(self, ranges, wall_start, wall_end):
+        """
+        Wall approximation
+        """
+        # wall_start, wall_end = self.wall_start, self.wall_end
+        if self.SIDE == 1:
+            wall_start, wall_end = -wall_end, -wall_start
+        wall_start, wall_end = self.deg_to_index(wall_start), self.deg_to_index(wall_end)
+        wall_angles = np.array([self.angle_min + self.angle_increment * i for i in range(wall_start, wall_end)])
+        detected_wall = np.array(ranges[wall_start:wall_end])
 
         ### Line Approximation ###
         x = detected_wall * np.cos(wall_angles)
         y = detected_wall * np.sin(wall_angles)
 
-        m, b = np.polyfit(x, y, deg=1)
-
         max_distance = 6
         mask = (x**2 + y**2) <= max_distance**2
         x_filtered = x[mask]
         y_filtered = y[mask]
+
         if x_filtered.size < 2:
             m, b = 0, self.DESIRED_DISTANCE + 5.0
         else:
             m, b = np.polyfit(x_filtered, y_filtered, deg=1)
 
-        # wall_distance = abs(b) / np.sqrt(1 + m**2)
-        wall_distance = abs(b)
+        wall_distance = abs(b)/np.sqrt(m**2+1)
         VisualizationTools.plot_line(x, m*x + b, self.line_pub, frame="/laser")
 
-        ### PID ###
-        e_side = (wall_distance - self.DESIRED_DISTANCE) * self.SIDE
-        e_front = front_distance_error(front_distance) * -self.SIDE
+        return wall_distance
+
+
+    def PID(self, wall_distance):
+        """
+        PID
+        """
+        e = self.Kp * (wall_distance - self.DESIRED_DISTANCE) * self.SIDE
 
         t = self.get_clock().now().nanoseconds / 1e9
         dt = t - self.prev_t
-        d_side = (e_side - self.prev_e) / dt
+        d = (e - self.prev_e) / dt
 
-        self.prev_e = e_side
+        self.prev_e = e
         self.prev_t = t
 
-        u = self.Kp * e_side + self.Kd * d_side + self.Kf * e_front
+        u = self.Kp * e + self.Kd * d
 
-        print(f"{u}")
+        return u
 
-        ### Publishing ###
+    def pub_PID(self, u):
+        """
+        Publish Ackermann steering command
+        """
         acker = AckermannDriveStamped()
         acker.header.stamp = self.get_clock().now().to_msg()
         acker.drive.speed = self.VELOCITY
@@ -121,6 +174,34 @@ class WallFollower(Node):
         acker.drive.steering_angle = u
         acker.drive.steering_angle_velocity = 0.0
         self.drive_publisher.publish(acker)
+
+        return
+
+    # TODO: Write your callback functions here
+    def listener_callback(self, msg):
+        print = self.get_logger().info
+        ranges = msg.ranges
+        self.angle_min = msg.angle_min
+        self.angle_increment = msg.angle_increment
+
+        wall_distance = self.wall_dist(ranges, self.wall_start, self.wall_end)
+        u = self.PID(wall_distance)
+        turn = self.turns[self.opp_close(ranges), self.same_close(ranges), self.front_close(ranges)]
+
+        print(f"{self.opp_close(ranges), self.same_close(ranges), self.front_close(ranges)}")
+        if turn == "same":
+            u = np.pi/2 * self.SIDE
+            print('Same side turn')
+        elif turn == "opp":
+            wall_distance_wide = self.wall_dist(ranges, self.wall_start_wide, self.wall_end_wide)
+            u = self.PID(wall_distance_wide)
+            # u = -np.pi/2 * self.SIDE
+            print('Opp side turn')
+        else:
+            print('No turn')
+
+        self.pub_PID(u)
+
 
     def parameters_callback(self, params):
         """
