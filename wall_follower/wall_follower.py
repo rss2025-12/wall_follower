@@ -9,9 +9,7 @@ from visualization_msgs.msg import Marker
 from rcl_interfaces.msg import SetParametersResult
 from wall_follower.visualization_tools import VisualizationTools
 from collections import deque
-import csv
-import time
-import os
+import csv, time, os
 
 
 class WallFollower(Node):
@@ -87,7 +85,7 @@ class WallFollower(Node):
 
         self.c = 1
 
-        self.csv_file = "distance_data.csv"
+        self.csv_file = "distance_safety_box_65_person.csv"
     
     def deg_to_index(self, deg):
         return int((deg * math.pi / 180 - self.angle_min) / self.angle_increment)
@@ -176,9 +174,9 @@ class WallFollower(Node):
 
         return wall_distance
     
-    def wall_follower_data(csv_filename, c, distance_formula, wall_distance, interval=0.5):
+    def wall_follower_data(self, csv_filename, c, distance_formula, wall_distance, interval=0.5):
         # Check if the file already exists so we can write header only once.
-        file_exists = os.path.exists(csv_filename) and os.stat(csv_filename).st_size > 0
+        file_exists = os.path.exists(csv_filename)
         
         with open(csv_filename, 'a', newline='') as csvfile:
             writer = csv.writer(csvfile)
@@ -193,12 +191,13 @@ class WallFollower(Node):
             
             # Get the current time stamp in a readable format.
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            
-            # Write the new row to the CSV.
-            writer.writerow([timestamp, plot_distance])
+
+            if (time.localtime().tm_sec % 2 == 0):
+                # Write the new row to the CSV.
+                writer.writerow([timestamp, plot_distance])
             
             # Wait for the specified interval before the next log.
-            time.sleep(interval)
+            #time.sleep(interval)
 
     def PID(self, wall_distance):
         """
