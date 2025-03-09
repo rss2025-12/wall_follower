@@ -9,6 +9,9 @@ from visualization_msgs.msg import Marker
 from rcl_interfaces.msg import SetParametersResult
 from wall_follower.visualization_tools import VisualizationTools
 from collections import deque
+import csv
+import time
+import os
 
 
 class WallFollower(Node):
@@ -82,7 +85,10 @@ class WallFollower(Node):
         self.prev_e = 0
         self.prev_t = self.get_clock().now().nanoseconds / 1e9
 
+        self.c = 1
 
+        self.csv_file = "distance_data.csv"
+    
     def deg_to_index(self, deg):
         return int((deg * math.pi / 180 - self.angle_min) / self.angle_increment)
 
@@ -163,10 +169,36 @@ class WallFollower(Node):
             m, b = np.polyfit(x_filtered, y_filtered, deg=1)
 
         wall_distance = self.distance_formula[distance_formula](m, b)
+
+        self.wall_follower_data(self.csv_file, self.c, self.distance_formula, wall_distance)
+
         VisualizationTools.plot_line(x, m*x + b, self.line_pub, frame="/laser")
 
         return wall_distance
-
+    
+    def wall_follower_data(csv_filename, c, distance_formula, wall_distance, interval=0.5):
+        # Check if the file already exists so we can write header only once.
+        file_exists = os.path.exists(csv_filename) and os.stat(csv_filename).st_size > 0
+        
+        with open(csv_filename, 'a', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            # Write header if file is new or empty.
+            if not file_exists:
+                writer.writerow(["timestamp", "plot_distance"])
+            
+            if distance_formula == "min":
+                plot_distance = wall_distance / c
+            else:
+                plot_distance = wall_distance
+            
+            # Get the current time stamp in a readable format.
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            
+            # Write the new row to the CSV.
+            writer.writerow([timestamp, plot_distance])
+            
+            # Wait for the specified interval before the next log.
+            time.sleep(interval)
 
     def PID(self, wall_distance):
         """
