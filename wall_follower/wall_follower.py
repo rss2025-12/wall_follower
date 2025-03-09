@@ -38,7 +38,6 @@ class WallFollower(Node):
         ### Constants ###
         self.angle_min = 0.1
         self.angle_increment = 0.1
-        self.sigmoid_width = 0.3
 
         ### Turn logic ###
         self.turns = {
@@ -53,21 +52,29 @@ class WallFollower(Node):
             (0, 0, 0): 'straight'
         }
 
+        self.distance_formula = {
+            'ninety': lambda m, b: abs(b),
+            'min': lambda m, b: abs(b) / np.sqrt(m**2 + 1)
+        }
+
         # Threshholds #
-        self.front_threshold = self.DESIRED_DISTANCE * 1.5 + self.VELOCITY * 0.5
-        self.same_threshold = self.DESIRED_DISTANCE * 2.5 + self.VELOCITY * 0.5
+        self.front_threshold = self.DESIRED_DISTANCE * 1.0 + self.VELOCITY * 1.0
+        self.same_threshold = self.DESIRED_DISTANCE * 1.35 + self.VELOCITY * 0.0
         self.opp_threshold = self.DESIRED_DISTANCE * 0.5 + self.VELOCITY * 0.0
 
-        ### Windows (Defined for the right side) ###
-        self.wall_start, self.wall_end = -100, -60
+        # Turn Detection Windows (Defined for the right side) #
+        self.front_start, self.front_end = -5, 5
+        self.same_start, self.same_end =  -70, -60
         self.opp_start, self.opp_end = -95, -85
-        self.same_start, self.same_end =  -90, -30
-        self.front_start, self.front_end = -3, 3
-        self.wall_start_wide, self.wall_end_wide = -80, 0
+
+        ### Wall Windows (Defined for the right side) ###
+        self.wall_start, self.wall_end = -110, -60
+        # self.wall_start_open, self.wall_end_open = -130, -100
+        self.wall_start_front, self.wall_end_front = -100, 40
 
         ### PID constants ###
-        self.Kp = 2.5 # 2.5
-        self.Kd = 0.3 # 0.3
+        self.Kp = 2.2 # 2.5
+        self.Kd = 0.2 # 0.3
 
         self.prev_e = 0
         self.prev_t = self.get_clock().now().nanoseconds / 1e9
@@ -97,10 +104,10 @@ class WallFollower(Node):
         start, end = self.same_start, self.same_end
         if self.SIDE == 1:
             start, end = -end, -start
-        if np.min(ranges[self.deg_to_index(start):self.deg_to_index(end)]) < self.same_threshold:
+        detected_same = np.array(ranges[self.deg_to_index(start):self.deg_to_index(end)])
+        if np.mean(detected_same) < self.same_threshold:
             return 1
         return 0
-
 
     def front_close(self, ranges):
         """
@@ -118,9 +125,22 @@ class WallFollower(Node):
         """
         Wall approximation
         """
-        # wall_start, wall_end = self.wall_start, self.wall_end
+        ### Wall start and end based on turn logic ###
+        if self.same_close(ranges) == 0:
+            self.get_logger().info("Open")
+            distance_formula = 'ninety'
+            wall_start, wall_end = self.wall_start, self.wall_end
+        elif self.front_close(ranges) == 1:
+            self.get_logger().info("Front")
+            distance_formula = 'min'
+            wall_start, wall_end = self.wall_start_front, self.wall_end_front
+        else:
+            self.get_logger().info("Normal")
+            distance_formula = 'ninety'
+            wall_start, wall_end = self.wall_start, self.wall_end
         if self.SIDE == 1:
             wall_start, wall_end = -wall_end, -wall_start
+
         wall_start, wall_end = self.deg_to_index(wall_start), self.deg_to_index(wall_end)
         wall_angles = np.array([self.angle_min + self.angle_increment * i for i in range(wall_start, wall_end)])
         detected_wall = np.array(ranges[wall_start:wall_end])
@@ -129,7 +149,7 @@ class WallFollower(Node):
         x = detected_wall * np.cos(wall_angles)
         y = detected_wall * np.sin(wall_angles)
 
-        max_distance = 6
+        max_distance = 7
         mask = (x**2 + y**2) <= max_distance**2
         x_filtered = x[mask]
         y_filtered = y[mask]
@@ -139,7 +159,7 @@ class WallFollower(Node):
         else:
             m, b = np.polyfit(x_filtered, y_filtered, deg=1)
 
-        wall_distance = abs(b)/np.sqrt(m**2+1)
+        wall_distance = self.distance_formula[distance_formula](m, b)
         VisualizationTools.plot_line(x, m*x + b, self.line_pub, frame="/laser")
 
         return wall_distance
@@ -177,7 +197,7 @@ class WallFollower(Node):
 
         return
 
-    # TODO: Write your callback functions here
+
     def listener_callback(self, msg):
         print = self.get_logger().info
         ranges = msg.ranges
@@ -186,19 +206,7 @@ class WallFollower(Node):
 
         wall_distance = self.wall_dist(ranges, self.wall_start, self.wall_end)
         u = self.PID(wall_distance)
-        turn = self.turns[self.opp_close(ranges), self.same_close(ranges), self.front_close(ranges)]
-
-        print(f"{self.opp_close(ranges), self.same_close(ranges), self.front_close(ranges)}")
-        if turn == "same":
-            u = np.pi/2 * self.SIDE
-            print('Same side turn')
-        elif turn == "opp":
-            wall_distance_wide = self.wall_dist(ranges, self.wall_start_wide, self.wall_end_wide)
-            u = self.PID(wall_distance_wide)
-            # u = -np.pi/2 * self.SIDE
-            print('Opp side turn')
-        else:
-            print('No turn')
+        # turn = self.turns[self.opp_close(ranges), self.same_close(ranges), self.front_close(ranges)]
 
         self.pub_PID(u)
 
