@@ -38,6 +38,7 @@ class WallFollower(Node):
         ### Constants ###
         self.angle_min = 0.1
         self.angle_increment = 0.1
+        self.c = 1.0
 
         ### Turn logic ###
         self.turns = {
@@ -54,12 +55,12 @@ class WallFollower(Node):
 
         self.distance_formula = {
             'ninety': lambda m, b: abs(b),
-            'min': lambda m, b: abs(b) / np.sqrt(m**2 + 1)
+            'min': lambda m, b: self.c * abs(b) / np.sqrt(m**2 + 1)
         }
 
         # Threshholds #
         self.front_threshold = self.DESIRED_DISTANCE * 1.0 + self.VELOCITY * 1.0
-        self.same_threshold = self.DESIRED_DISTANCE * 1.35 + self.VELOCITY * 0.0
+        self.same_threshold = self.DESIRED_DISTANCE * np.sqrt(2) + self.VELOCITY * 0.0
         self.opp_threshold = self.DESIRED_DISTANCE * 0.5 + self.VELOCITY * 0.0
 
         # Turn Detection Windows (Defined for the right side) #
@@ -73,8 +74,10 @@ class WallFollower(Node):
         self.wall_start_front, self.wall_end_front = -100, 40
 
         ### PID constants ###
-        self.Kp = 2.2 # 2.5
-        self.Kd = 0.2 # 0.3
+        # self.Kp = 2.2 # 2.5 # previous line
+        self.Kp = 1.7 # new line
+        self.Kd = 0.2 # 0.3 # previous line
+        # self.Kd = 0.16 # new line
 
         self.prev_e = 0
         self.prev_t = self.get_clock().now().nanoseconds / 1e9
