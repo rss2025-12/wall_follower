@@ -42,20 +42,8 @@ class WallFollower(Node):
         self.c = 1.0
 
         ### Turn logic ###
-        self.turns = {
-            # Opposite Same Front: Action #
-            (1, 1, 1): 'straight',
-            (1, 1, 0): 'straight',
-            (1, 0, 1): 'same',
-            (0, 1, 1): 'opp',
-            (1, 0, 0): 'same',
-            (0, 1, 0): 'straight',
-            (0, 0, 1): 'same',
-            (0, 0, 0): 'straight'
-        }
-
         self.distance_formula = {
-            'ninety': lambda m, b: abs(b),
+            'abs': lambda m, b: abs(b),
             'min': lambda m, b: self.c * abs(b) / np.sqrt(m**2 + 1)
         }
 
@@ -86,7 +74,7 @@ class WallFollower(Node):
         self.c = 1
 
         self.csv_file = "distance_safety_box_65_person.csv"
-    
+
     def deg_to_index(self, deg):
         return int((deg * math.pi / 180 - self.angle_min) / self.angle_increment)
 
@@ -135,7 +123,7 @@ class WallFollower(Node):
         ### Wall start and end based on turn logic ###
         if self.same_close(ranges) == 0:
             self.get_logger().info("Open")
-            distance_formula = 'ninety'
+            distance_formula = 'abs'
             wall_start, wall_end = self.wall_start, self.wall_end
         elif self.front_close(ranges) == 1:
             self.get_logger().info("Front")
@@ -143,7 +131,7 @@ class WallFollower(Node):
             wall_start, wall_end = self.wall_start_front, self.wall_end_front
         else:
             self.get_logger().info("Normal")
-            distance_formula = 'ninety'
+            distance_formula = 'min'
             wall_start, wall_end = self.wall_start, self.wall_end
         if self.SIDE == 1:
             wall_start, wall_end = -wall_end, -wall_start
@@ -173,29 +161,29 @@ class WallFollower(Node):
         VisualizationTools.plot_line(x, m*x + b, self.line_pub, frame="/laser")
 
         return wall_distance
-    
+
     def wall_follower_data(self, csv_filename, c, distance_formula, wall_distance, interval=0.5):
         # Check if the file already exists so we can write header only once.
         file_exists = os.path.exists(csv_filename)
-        
+
         with open(csv_filename, 'a', newline='') as csvfile:
             writer = csv.writer(csvfile)
             # Write header if file is new or empty.
             if not file_exists:
                 writer.writerow(["timestamp", "plot_distance"])
-            
+
             if distance_formula == "min":
                 plot_distance = wall_distance / c
             else:
                 plot_distance = wall_distance
-            
+
             # Get the current time stamp in a readable format.
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
             if (time.localtime().tm_sec % 2 == 0):
                 # Write the new row to the CSV.
                 writer.writerow([timestamp, plot_distance])
-            
+
             # Wait for the specified interval before the next log.
             #time.sleep(interval)
 
