@@ -73,7 +73,7 @@ class WallFollower(Node):
 
         self.c = 1
 
-        self.csv_file = "distance_safety_box_65_person.csv"
+        self.csv_file = "new_right_convex.csv"
 
     def deg_to_index(self, deg):
         return int((deg * math.pi / 180 - self.angle_min) / self.angle_increment)
@@ -180,9 +180,9 @@ class WallFollower(Node):
             # Get the current time stamp in a readable format.
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
-            if (time.localtime().tm_sec % 2 == 0):
-                # Write the new row to the CSV.
-                writer.writerow([timestamp, plot_distance])
+            # if (time.localtime().tm_sec % 2 == 0):
+            # Write the new row to the CSV.
+            writer.writerow([timestamp, plot_distance])
 
             # Wait for the specified interval before the next log.
             #time.sleep(interval)
