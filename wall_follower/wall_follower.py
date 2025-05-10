@@ -4,6 +4,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import Bool
 from ackermann_msgs.msg import AckermannDriveStamped
 from visualization_msgs.msg import Marker
 from rcl_interfaces.msg import SetParametersResult
@@ -17,10 +18,11 @@ class WallFollower(Node):
         super().__init__("wall_follower_copy")
         # Declare parameters to make them available for use
         self.declare_parameter("scan_topic", "/scan")
-        self.declare_parameter("drive_topic", "/vesc/high_level/input/nav_0")
+        self.declare_parameter("drive_topic", "default")
         self.declare_parameter("side", 1)
         self.declare_parameter("velocity", 1.0)
         self.declare_parameter("desired_distance", 1.0)
+        # self.declare_parameter("planner_switch_topic", "default")
 
         # Fetch constants from the ROS parameter server
         # DO NOT MODIFY THIS! This is necessary for the tests to be able to test varying parameters!
@@ -30,11 +32,13 @@ class WallFollower(Node):
         self.VELOCITY = self.get_parameter('velocity').get_parameter_value().double_value
         self.DESIRED_DISTANCE = self.get_parameter('desired_distance').get_parameter_value().double_value
         self.add_on_set_parameters_callback(self.parameters_callback)
+        # self.switch_topic = self.get_parameter('planner_switch_topic').get_parameter_value().string_value
 
         # TODO: Initialize your publishers and subscribers here
         self.drive_publisher = self.create_publisher(AckermannDriveStamped, self.DRIVE_TOPIC, 10)
         self.line_pub = self.create_publisher(Marker, 'wall', 1)
         self.scan_subscriber = self.create_subscription(LaserScan, self.SCAN_TOPIC, self.listener_callback, 10)
+        # self.switch_subscriber = self.create_subscription(Bool, self.switch_topic, self.switch_callback, 10)
 
         ### Constants ###
         self.angle_min = 0.1
@@ -86,7 +90,9 @@ class WallFollower(Node):
         self.c = 1
 
         self.csv_file = "distance_safety_box_65_person.csv"
-    
+
+        # self.switch = False
+
     def deg_to_index(self, deg):
         return int((deg * math.pi / 180 - self.angle_min) / self.angle_increment)
 
@@ -116,6 +122,7 @@ class WallFollower(Node):
             return 1
         return 0
 
+
     def front_close(self, ranges):
         """
         Check if the front range is less than the front_close_threshold
@@ -134,15 +141,15 @@ class WallFollower(Node):
         """
         ### Wall start and end based on turn logic ###
         if self.same_close(ranges) == 0:
-            self.get_logger().info("Open")
+            # self.get_logger().info("Open")
             distance_formula = 'ninety'
             wall_start, wall_end = self.wall_start, self.wall_end
         elif self.front_close(ranges) == 1:
-            self.get_logger().info("Front")
+            # self.get_logger().info("Front")
             distance_formula = 'min'
             wall_start, wall_end = self.wall_start_front, self.wall_end_front
         else:
-            self.get_logger().info("Normal")
+            # self.get_logger().info("Normal")
             distance_formula = 'ninety'
             wall_start, wall_end = self.wall_start, self.wall_end
         if self.SIDE == 1:
@@ -168,36 +175,38 @@ class WallFollower(Node):
 
         wall_distance = self.distance_formula[distance_formula](m, b)
 
-        self.wall_follower_data(self.csv_file, self.c, self.distance_formula, wall_distance)
+        # self.wall_follower_data(self.csv_file, self.c, self.distance_formula, wall_distance)
 
         VisualizationTools.plot_line(x, m*x + b, self.line_pub, frame="/laser")
 
         return wall_distance
-    
+
+
     def wall_follower_data(self, csv_filename, c, distance_formula, wall_distance, interval=0.5):
         # Check if the file already exists so we can write header only once.
         file_exists = os.path.exists(csv_filename)
-        
+
         with open(csv_filename, 'a', newline='') as csvfile:
             writer = csv.writer(csvfile)
             # Write header if file is new or empty.
             if not file_exists:
                 writer.writerow(["timestamp", "plot_distance"])
-            
+
             if distance_formula == "min":
                 plot_distance = wall_distance / c
             else:
                 plot_distance = wall_distance
-            
+
             # Get the current time stamp in a readable format.
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
             if (time.localtime().tm_sec % 2 == 0):
                 # Write the new row to the CSV.
                 writer.writerow([timestamp, plot_distance])
-            
+
             # Wait for the specified interval before the next log.
             #time.sleep(interval)
+
 
     def PID(self, wall_distance):
         """
@@ -215,6 +224,7 @@ class WallFollower(Node):
         u = self.Kp * e + self.Kd * d
 
         return u
+
 
     def pub_PID(self, u):
         """
@@ -241,7 +251,7 @@ class WallFollower(Node):
         wall_distance = self.wall_dist(ranges, self.wall_start, self.wall_end)
         u = self.PID(wall_distance)
         # turn = self.turns[self.opp_close(ranges), self.same_close(ranges), self.front_close(ranges)]
-
+        # if self.switch:
         self.pub_PID(u)
 
 
@@ -264,6 +274,9 @@ class WallFollower(Node):
                 self.get_logger().info(f"Updated desired_distance to {self.DESIRED_DISTANCE}")
         return SetParametersResult(successful=True)
 
+    # def switch_callback(self, msg):
+    #     self.switch = msg.data
+    #     self.get_logger().info("Switched to wall follower")
 
 def main():
     rclpy.init()
