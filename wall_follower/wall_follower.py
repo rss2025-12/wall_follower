@@ -80,7 +80,7 @@ class WallFollower(Node):
 
         ### PID constants ###
         # self.Kp = 2.2 # 2.5 # previous line
-        self.Kp = 1.7 # new line
+        self.Kp = 1.3 # 1.7 # new line
         self.Kd = 0.2 # 0.3 # previous line
         # self.Kd = 0.16 # new line
 
@@ -90,6 +90,8 @@ class WallFollower(Node):
         self.c = 1
 
         self.csv_file = "distance_safety_box_65_person.csv"
+
+        self.get_logger().info(f"Desired_distance is {self.DESIRED_DISTANCE}")
 
         # self.switch = False
 
